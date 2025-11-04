@@ -1,0 +1,9 @@
+{
+    "name": "whatsapp-backend",
+    "description": "WhatsApp-like backend for Selenium bot demo",
+    
+    "require": {
+        "pusher/pusher-php-server": "^7.2"
+    }
+    
+}
