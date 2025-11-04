@@ -30,7 +30,7 @@ time.sleep(5)
 
 # Phone number to search for
 search_number = "9892026250"
-message = "hiii from bot"
+message = "Hello, We will reach out to you within 12 hours"
 last_digits = search_number[-4:]
 
 chat_selected = False
