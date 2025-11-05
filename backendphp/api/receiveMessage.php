@@ -14,10 +14,10 @@ require_once __DIR__ . '/../src/Database.php';
 require_once __DIR__ . '/../src/Auth.php';
 require_once __DIR__ . '/../src/Helpers.php';
 
-// ✅ Authentication check
+//  Authentication check
 Auth::check();
 
-// ✅ Parse JSON input
+//  Parse JSON input
 $input = json_decode(file_get_contents('php://input'), true);
 $number = $input['number'] ?? '';
 $message = $input['message'] ?? '';
