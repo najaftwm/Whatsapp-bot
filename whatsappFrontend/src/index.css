@@ -1,0 +1,39 @@
+@import "tailwindcss";
+@import "tailwindcss/preflight";
+@tailwind utilities;
+
+/* Tailwind CSS theme tokens for WhatsApp-like UI */
+@theme {
+  --color-whatsappGreen: #128C7E;
+  --color-chatBg: #111B21;            /* app background */
+  --color-panel: #111B21;             /* left panel bg */
+  --color-panelElevated: #202C33;     /* headers, cards */
+  --color-border: #2A3942;            /* borders/lines */
+  --color-textPrimary: #E9EDEF;
+  --color-textSecondary: #8696A0;
+  --color-bubbleIncoming: #202C33;    /* incoming bubble */
+  --color-bubbleOutgoing: #005C4B;    /* outgoing bubble */
+  --color-inputBg: #2A3942;           /* input bar */
+}
+
+html, body, #root {
+  height: 100%;
+}
+
+body { margin: 0; background: var(--color-chatBg); color: var(--color-textPrimary); }
+
+/* Hide scrollbars but still scrollable */
+.hide-scrollbar {
+  -ms-overflow-style: none; /* IE and Edge */
+  scrollbar-width: none; /* Firefox */
+}
+.hide-scrollbar::-webkit-scrollbar {
+  display: none; /* Chrome/Safari/Webkit */
+}
+
+/* WhatsApp wallpaper (subtle doodle) using embedded SVG */
+.wa-wallpaper {
+  background-color: #0B141A;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='320' height='320' viewBox='0 0 320 320'%3E%3Cg fill='none' stroke='%232a3942' stroke-opacity='0.35' stroke-width='1'%3E%3Cpath d='M20 40c12 0 18-8 28-8s16 8 28 8 18-8 28-8 16 8 28 8 18-8 28-8 16 8 28 8 18-8 28-8'/%3E%3Ccircle cx='60' cy='120' r='10' /%3E%3Ccircle cx='180' cy='200' r='8' /%3E%3Cpath d='M100 260c20-8 36 8 56 0 20-8 36 8 56 0' /%3E%3C/g%3E%3C/svg%3E");
+  background-size: 380px 380px;
+}
