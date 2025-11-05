@@ -7,6 +7,8 @@ define('DB_PASS', '');
 define('BOT_URL', 'http://localhost:5000');
 define('API_KEY', 'q6ktqrPs3wZ4kvZAzNdi7');
 
+// Session-based auth (no JWT)
+
 define('COMPANY_WHATSAPP_NUMBER', '+919653375080'); 
 
 // Pusher Configuration
