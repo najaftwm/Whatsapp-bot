@@ -1,164 +1,143 @@
-// src/components/ChatWindow.jsx
-import React, { useEffect, useRef, useState } from 'react'
-import MessageBubble from './MessageBubble'
-import MessageInput from './MessageInput'
-import TypingIndicator from './TypingIndicator'
-import { channel, simulateIncoming } from '../pusherClient'
-import { messagesByChat as initialMessages } from '../mockData'
-import { motion, AnimatePresence } from 'framer-motion'
-import { Search, Paperclip, MoreVertical } from 'lucide-react'
+import React, { useState, useEffect, useRef } from "react";
+import { Send } from "lucide-react";
+import { pusher } from "../pusherClient";
 
-export default function ChatWindow({ chatId, chatInfo }) {
-  // messages state for the active chat
-  const [messages, setMessages] = useState(() => initialMessages[chatId]?.slice() || [])
-  const [typing, setTyping] = useState(false)
-  const bottomRef = useRef(null)
+export default function ChatWindow({ activeChat, messages }) {
+  const [input, setInput] = useState("");
+  const [chatMessages, setChatMessages] = useState(messages || []);
+  const endRef = useRef(null);
 
-  // When chatId changes, load messages for that chat (clone to avoid mutating mock)
+  // Fetch messages when chat changes
   useEffect(() => {
-    setMessages(initialMessages[chatId]?.slice() || [])
-    setTyping(false)
-  }, [chatId])
-
-  // Bind to mocked pusher channel events for this chat
-  useEffect(() => {
-    function onNew(msg) {
-      if (msg.chatId !== chatId) return
-      const incoming = {
-        id: String(Date.now()) + Math.random().toString(36).slice(2, 7),
-        from: 'customer',
-        body: msg.body,
-        time: msg.time || new Date().toISOString(),
-        status: 'delivered',
+    async function fetchMessages() {
+      if (!activeChat) {
+        setChatMessages([]);
+        return;
       }
-      setMessages(prev => [...prev, incoming])
+      try {
+        const res = await fetch(
+          `http://localhost/whatsapp-backend/backendphp/api/getMessages.php?contact_id=${activeChat}`,
+          { credentials: "include" }
+        );
+        const data = await res.json();
+        if (data?.ok && data.messages) {
+          // Map backend message format to frontend format
+          const mapped = data.messages.map(m => ({
+            id: m.id,
+            message: m.message_text || '',
+            sender_type: m.sender_type || 'customer',
+            timestamp: m.timestamp
+          }));
+          setChatMessages(mapped);
+        }
+      } catch (e) {
+        console.error("Failed to load messages:", e);
+        setChatMessages([]);
+      }
     }
+    fetchMessages();
+  }, [activeChat]);
 
-    function onTyping(payload) {
-      if (payload.chatId === chatId) setTyping(true)
-    }
-    function onStopTyping(payload) {
-      if (payload.chatId === chatId) setTyping(false)
-    }
-
-    channel.bind('new-message', onNew)
-    channel.bind('typing', onTyping)
-    channel.bind('stop-typing', onStopTyping)
-
-    return () => {
-      channel.unbind('new-message', onNew)
-      channel.unbind('typing', onTyping)
-      channel.unbind('stop-typing', onStopTyping)
-    }
-  }, [chatId])
-
-  // Auto-scroll to bottom when messages or typing changes
+  // Real-time updates
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' })
-  }, [messages, typing])
+    if (!activeChat) return;
+    const channel = pusher.subscribe("chat-channel");
+    channel.bind("new-message", (data) => {
+      if (data.contact_id === activeChat) {
+        setChatMessages((prev) => [...prev, {
+          id: data.id || Date.now(),
+          message: data.message || data.message_text || '',
+          sender_type: data.sender_type || 'customer',
+          timestamp: data.timestamp || new Date().toISOString()
+        }]);
+      }
+    });
+    return () => {
+      pusher.unsubscribe("chat-channel");
+    };
+  }, [activeChat]);
 
-  // Typing handlers for when user types
-  function handleTyping(chatId) {
-    channel.emitMock?.('typing', { chatId, from: 'me' })
-  }
+  // Scroll to bottom
+  useEffect(() => {
+    endRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [chatMessages]);
 
-  function handleStopTyping(chatId) {
-    channel.emitMock?.('stop-typing', { chatId, from: 'me' })
-  }
+  // Handle Send
+  const handleSend = async () => {
+    if (!input.trim()) return;
 
-  // Send handler (from MessageInput)
-  function send(text) {
-    const id = String(Date.now()) + Math.random().toString(36).slice(2, 7)
-    const newMsg = {
-      id,
-      from: 'me',
-      body: text,
-      time: new Date().toISOString(),
-      status: 'sent', // initial: sent (single tick)
+    const messageText = input.trim();
+    setInput("");
+
+    // Local optimistic update
+    const tempId = `temp-${Date.now()}`;
+    setChatMessages((prev) => [
+      ...prev,
+      { 
+        id: tempId,
+        message: messageText, 
+        sender_type: "company",
+        timestamp: new Date().toISOString()
+      },
+    ]);
+
+    try {
+      await fetch(
+        "http://localhost/whatsapp-backend/backendphp/api/sendMessage.php",
+        {
+          method: "POST",
+          credentials: "include",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            contact_id: activeChat,
+            message: messageText,
+          }),
+        }
+      );
+    } catch (e) {
+      console.error("Send failed:", e);
     }
-
-    // add to local messages immediately
-    setMessages(prev => [...prev, newMsg])
-
-    // simulate status progression: sent -> delivered -> read
-    setTimeout(() => updateStatus(id, 'delivered'), 900)   // 0.9s -> delivered (2 gray ticks)
-    setTimeout(() => updateStatus(id, 'read'), 2200)       // 2.2s -> read (2 blue ticks)
-
-    // simulate remote typing + reply after a short delay
-    // show typing event
-    setTimeout(() => {
-      channel.emitMock?.('typing', { chatId })
-      setTimeout(() => channel.emitMock?.('stop-typing', { chatId }), 1500)
-    }, 800)
-
-    // then simulate an incoming message (customer reply)
-    simulateIncoming(chatId, `Got your message: "${text}"`, 3000)
-  }
-
-  // update status helper
-  function updateStatus(messageId, status) {
-    setMessages(prev => prev.map(m => (m.id === messageId ? { ...m, status } : m)))
-  }
+  };
 
   return (
-    <div className="flex flex-col h-full">
-      {/* Header */}
-      <div className="flex items-center gap-5 px-7 h-18 bg-(--color-panelElevated) text-textPrimary border-b border-(--color-border)">
-        <div className="relative w-10 h-10 rounded-full bg-(--color-border) flex items-center justify-center font-semibold">
-          {chatInfo?.avatar || 'C'}
-          {chatInfo?.online && (
-            <span className="absolute -bottom-0.5 -right-0.5 w-3 h-3 bg-green-500 rounded-full ring-2 ring-(--color-panelElevated)" />
-          )}
-        </div>
-        <div className="flex-1 min-w-0">
-          <div className="font-medium truncate text-[16px]">{chatInfo?.name || 'Unknown'}</div>
-          <div className="text-[13px] text-textSecondary truncate">{chatInfo?.online ? 'Online' : 'Offline'}</div>
-        </div>
-        <div className="flex items-center gap-3 text-textSecondary">
-          <button title="Search" className="p-3 hover:text-textPrimary"><Search size={22} /></button>
-          <button title="Attach" className="p-3 hover:text-textPrimary"><Paperclip size={22} /></button>
-          <button title="Menu" className="p-3 hover:text-textPrimary"><MoreVertical size={22} /></button>
-        </div>
-      </div>
-
-      {/* Messages Area */}
-      <div className="flex-1 px-10 pt-8 pb-6 overflow-y-auto hide-scrollbar">
-        <div className="space-y-3">
-          <AnimatePresence initial={false}>
-            {messages.map(m => (
-              <motion.div
-                key={m.id}
-                initial={{ opacity: 0, y: 8 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: -8 }}
-                transition={{ duration: 0.18 }}
-              >
-                <MessageBubble m={m} isMine={m.from === 'me'} />
-              </motion.div>
-            ))}
-          </AnimatePresence>
-
-          {/* Typing indicator */}
-          {typing && (
-            <div className="flex items-start">
-              <TypingIndicator />
+    <div className="flex flex-col h-full bg-(--color-panel)">
+      <div className="flex-1 overflow-y-auto p-4 space-y-3">
+        {chatMessages.map((msg) => (
+          <div
+            key={msg.id || msg.timestamp}
+            className={`flex ${
+              msg.sender_type === "company" ? "justify-end" : "justify-start"
+            }`}
+          >
+            <div
+              className={`px-4 py-2 rounded-2xl max-w-[75%] text-sm ${
+                msg.sender_type === "company"
+                  ? "bg-green-600 text-white"
+                  : "bg-gray-700 text-gray-100"
+              }`}
+            >
+              {msg.message || msg.message_text}
             </div>
-          )}
-
-          {/* Dummy spacer to scroll into view */}
-          <div ref={bottomRef} />
-        </div>
+          </div>
+        ))}
+        <div ref={endRef} />
       </div>
 
-      {/* Input */}
-      <div className="border-t bg-white">
-        <MessageInput 
-          onSend={send} 
-          chatId={chatId}
-          onTyping={handleTyping}
-          onStopTyping={handleStopTyping}
+      <div className="p-4 border-t border-(--color-border) flex items-center gap-2">
+        <input
+          value={input}
+          onChange={(e) => setInput(e.target.value)}
+          onKeyDown={(e) => e.key === "Enter" && handleSend()}
+          placeholder="Type a message"
+          className="flex-1 bg-(--color-inputBg) text-textPrimary px-4 py-2.5 rounded-full outline-none"
         />
+        <button
+          onClick={handleSend}
+          className="p-2.5 bg-green-600 text-white rounded-full hover:bg-green-700 transition"
+        >
+          <Send size={18} />
+        </button>
       </div>
     </div>
-  )
+  );
 }

@@ -11,7 +11,7 @@ export const authClient = {
   isAuthenticated() {
     try {
       return localStorage.getItem(AUTH_FLAG_KEY) === 'true';
-    } catch (_) {
+    } catch {
       return false;
     }
   },
@@ -20,7 +20,7 @@ export const authClient = {
     try {
       const raw = localStorage.getItem(USER_DATA_KEY);
       return raw ? JSON.parse(raw) : null;
-    } catch (_) {
+    } catch {
       return null;
     }
   },
@@ -45,7 +45,7 @@ export const authClient = {
       localStorage.setItem(USER_DATA_KEY, JSON.stringify(data.user));
       // Fire storage event compatibility for same-tab state consumers if needed
       window.dispatchEvent(new StorageEvent('storage', { key: AUTH_FLAG_KEY, newValue: 'true' }));
-    } catch (_) {
+    } catch {
       // ignore storage errors
     }
 
@@ -57,7 +57,7 @@ export const authClient = {
       localStorage.removeItem(AUTH_FLAG_KEY);
       localStorage.removeItem(USER_DATA_KEY);
       window.dispatchEvent(new StorageEvent('storage', { key: AUTH_FLAG_KEY, newValue: 'false' }));
-    } catch (_) {
+    } catch {
       // ignore
     }
   }

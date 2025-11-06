@@ -4,13 +4,47 @@ import ChatList from './components/ChatList'
 import ChatWindow from './components/ChatWindow'
 import Login from './components/Login'
 import { authClient } from './authClient'
-import { chats } from './mockData'
 import { ArrowLeft } from 'lucide-react'
 
 export default function App() {
-  const [activeChatId, setActiveChatId] = useState(chats[0]?.id || null)
+  const [activeChatId, setActiveChatId] = useState(null)
   const [mobileOpen, setMobileOpen] = useState(false)
   const [isAuthed, setIsAuthed] = useState(authClient.isAuthenticated())
+  const [contacts, setContacts] = useState([])
+
+  // Fetch contacts when authenticated
+  useEffect(() => {
+    if (!isAuthed) return;
+    async function fetchContacts() {
+      try {
+        const resp = await fetch(
+          "http://localhost/whatsapp-backend/backendphp/api/getContacts.php",
+          {
+            method: "GET",
+            credentials: "include",
+            headers: { "Content-Type": "application/json" },
+          }
+        );
+        const data = await resp.json();
+        if (data?.ok && data.contacts) {
+          // Map contacts to match ChatList format
+          const mapped = data.contacts.map((c) => ({
+            id: c.id,
+            name: c.name || c.phone_number || "Unknown",
+            phone_number: c.phone_number,
+            last_message: c.last_message || "",
+            last_seen: c.last_seen || "",
+            avatar: (c.name || c.phone_number || "?").slice(0, 2).toUpperCase(),
+          }));
+          setContacts(mapped);
+        }
+      } catch (e) {
+        console.error("Failed to load contacts:", e);
+      }
+    }
+    fetchContacts();
+  }, [isAuthed]);
+
   function handleLogout() {
     authClient.logout()
     setIsAuthed(false)
@@ -27,7 +61,8 @@ export default function App() {
     return () => window.removeEventListener('storage', onStorage)
   }, [])
 
-  const activeChat = chats.find(c => c.id === activeChatId)
+  // Find active chat info from contacts
+  const activeChat = activeChatId ? contacts.find(c => c.id === activeChatId) : null
 
   function handleSelect(chatId) {
     setActiveChatId(chatId)
@@ -45,13 +80,19 @@ export default function App() {
         {/* Left column: Chat list */}
         <div className="w-[30%] bg-(--color-panel) border-r border-(--color-border)">
           <div className="h-screen max-h-screen px-5 pt-3 pb-2">
-            <ChatList chats={chats} activeId={activeChatId} onSelect={handleSelect} onLogout={handleLogout} />
+            <ChatList chats={contacts} activeId={activeChatId} onSelect={handleSelect} onLogout={handleLogout} />
           </div>
         </div>
         {/* Right column: Chat window */}
         <div className="w-[70%]">
           <div className="h-screen max-h-screen wa-wallpaper">
-            <ChatWindow chatId={activeChatId} chatInfo={activeChat} />
+            {activeChatId ? (
+              <ChatWindow activeChat={activeChatId} />
+            ) : (
+              <div className="flex items-center justify-center h-full text-textSecondary">
+                Select a contact to start chatting
+              </div>
+            )}
           </div>
         </div>
       </div>
@@ -60,7 +101,7 @@ export default function App() {
       <div className="w-full md:hidden">
         {!mobileOpen && (
           <div className="h-screen bg-(--color-panel) overflow-hidden px-5 pt-3 pb-2">
-            <ChatList chats={chats} activeId={activeChatId} onSelect={handleSelect} onLogout={handleLogout} />
+            <ChatList chats={contacts} activeId={activeChatId} onSelect={handleSelect} onLogout={handleLogout} />
           </div>
         )}
 
@@ -77,12 +118,18 @@ export default function App() {
               </button>
               <div className="flex-1">
                 <div className="font-semibold text-[16px]">{activeChat?.name || 'Chat'}</div>
-                <div className="text-[13px] opacity-70">{activeChat?.online ? 'Online' : 'Offline'}</div>
+                <div className="text-[13px] opacity-70">{activeChat?.phone_number || 'Offline'}</div>
               </div>
             </div>
 
             <div className="flex-1">
-              <ChatWindow chatId={activeChatId} chatInfo={activeChat} />
+              {activeChatId ? (
+                <ChatWindow activeChat={activeChatId} />
+              ) : (
+                <div className="flex items-center justify-center h-full text-textSecondary">
+                  Select a contact to start chatting
+                </div>
+              )}
             </div>
           </div>
         )}

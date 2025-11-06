@@ -1,77 +1,90 @@
 <?php
-/**
- * sendMessage.php
- * ----------------
- * Sends a message from the company WhatsApp number to a customer.
- * - Stores the message in MySQL (sender_type = 'company')
- * - Forwards it to the Python bot
- * - Triggers a real-time Pusher event
- */
+// api/sendMessage.php
+// CORS headers must be set before any output
+$origin = $_SERVER['HTTP_ORIGIN'] ?? '';
+$allowedOrigins = ['http://localhost:5173', 'http://localhost:5174'];
+if (in_array($origin, $allowedOrigins, true)) {
+	header('Access-Control-Allow-Origin: ' . $origin);
+	header('Access-Control-Allow-Credentials: true');
+	header('Vary: Origin');
+}
+header('Access-Control-Allow-Headers: Content-Type, Authorization');
+header('Access-Control-Allow-Methods: POST, OPTIONS');
+
+// Handle preflight - must return CORS headers even if origin doesn't match
+if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
+	if (in_array($origin, $allowedOrigins, true)) {
+		header('Access-Control-Allow-Origin: ' . $origin);
+		header('Access-Control-Allow-Credentials: true');
+	}
+	header('Content-Length: 0');
+	http_response_code(204);
+	exit;
+}
 
 require_once __DIR__ . '/../config/config.php';
 require_once __DIR__ . '/../src/Database.php';
-require_once __DIR__ . '/../src/Auth.php';
 require_once __DIR__ . '/../src/Helpers.php';
+require_once __DIR__ . '/../src/Auth.php';
 
-// ✅ Authentication check
 Auth::check();
 
-// ✅ Parse JSON input
-$input = json_decode(file_get_contents('php://input'), true);
-$number = $input['number'] ?? '';
-$message = $input['message'] ?? '';
-$contactId = $input['contact_id'] ?? 0;
+if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
+    Helpers::jsonResponse(['error' => 'Method not allowed'], 405);
+}
 
-if (!$number || !$message) {
-    Helpers::jsonResponse(['error' => 'Missing parameters'], 400);
+$input = json_decode(file_get_contents('php://input'), true);
+$contactId = (int)($input['contact_id'] ?? 0);
+$message = trim($input['message'] ?? '');
+
+if (!$contactId || !$message) {
+    Helpers::jsonResponse(['error' => 'Missing contact_id or message'], 400);
 }
 
 try {
-    $db = Database::getInstance();
+    $db = Database::getInstance()->getConnection();
+    // Get contact phone number
+    $stmt = $db->prepare("SELECT phone_number FROM contacts WHERE id = ?");
+    $stmt->execute([$contactId]);
+    $contact = $stmt->fetch(PDO::FETCH_ASSOC);
+    if (!$contact) Helpers::jsonResponse(['error' => 'Contact not found'], 404);
 
-    // ✅ Store message in DB
+    $phone = $contact['phone_number'];
+
+    // Save to DB - use sender_type and message_text to match schema
     $stmt = $db->prepare("INSERT INTO messages (contact_id, sender_type, message_text, timestamp) VALUES (?, 'company', ?, NOW())");
     $stmt->execute([$contactId, $message]);
-    $messageId = $db->lastInsertId();
 
-    // ✅ Forward message to Python bot
-    $botPayload = [
-        'company_number' => COMPANY_WHATSAPP_NUMBER,
-        'recipient_number' => $number,
-        'message' => $message
-    ];
-
-    $ch = curl_init(BOT_URL . '/send');
-    curl_setopt_array($ch, [
-        CURLOPT_RETURNTRANSFER => true,
-        CURLOPT_POST => true,
-        CURLOPT_POSTFIELDS => json_encode($botPayload),
-        CURLOPT_HTTPHEADER => ['Content-Type: application/json']
+    // Notify Python bot
+    $payload = json_encode([
+        'phone_number' => $phone,
+        'message' => $message,
     ]);
-    $botResponse = curl_exec($ch);
-    $curlError = curl_error($ch);
+    $ch = curl_init(BOT_URL . '/send_message');
+    curl_setopt_array($ch, [
+        CURLOPT_POST => true,
+        CURLOPT_POSTFIELDS => $payload,
+        CURLOPT_HTTPHEADER => ['Content-Type: application/json', 'x-api-key: ' . API_KEY],
+        CURLOPT_RETURNTRANSFER => true,
+    ]);
+    $response = curl_exec($ch);
     curl_close($ch);
 
-    if ($curlError) {
-        error_log("Bot send error: " . $curlError);
+    // Push to frontend
+    if (ENABLE_PUSHER) {
+        require_once __DIR__ . '/../src/pusherInstance.php';
+        $pusher->trigger('chat-channel', 'new-message', [
+            'contact_id' => $contactId,
+            'id' => $db->lastInsertId(),
+            'sender_type' => 'company',
+            'message_text' => $message,
+            'message' => $message, // Also include for backward compatibility
+            'timestamp' => date('Y-m-d H:i:s'),
+        ]);
     }
 
-    // ✅ Trigger Pusher real-time update
-    Helpers::triggerPusher('chat-channel', 'new-message', [
-        'contact_id' => $contactId,
-        'sender_type' => 'company',
-        'message_text' => $message,
-        'timestamp' => date('Y-m-d H:i:s'),
-        'message_id' => $messageId,
-        'number' => $number,
-        'company_number' => COMPANY_WHATSAPP_NUMBER
-    ]);
-
-    Helpers::jsonResponse([
-        'success' => true,
-        'message_id' => $messageId,
-        'bot_response' => $botResponse ? json_decode($botResponse, true) : null
-    ]);
+    Helpers::jsonResponse(['ok' => true, 'bot_response' => $response]);
 } catch (Exception $e) {
     Helpers::jsonResponse(['error' => $e->getMessage()], 500);
 }
+?>

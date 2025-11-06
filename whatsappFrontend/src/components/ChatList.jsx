@@ -5,16 +5,63 @@ export default function ChatList({ chats, activeId, onSelect, onLogout }) {
   const [query, setQuery] = useState("");
   const [menuOpen, setMenuOpen] = useState(false);
   const menuRef = useRef(null);
+  const [contacts, setContacts] = useState(chats || []);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    setContacts(chats || []);
+  }, [chats]);
+
+  useEffect(() => {
+    let aborted = false;
+    async function fetchContacts() {
+      setLoading(true);
+      setError("");
+      try {
+        const resp = await fetch(
+          "http://localhost/whatsapp-backend/backendphp/api/getContacts.php",
+          {
+            method: "GET",
+            credentials: "include",
+            headers: { "Content-Type": "application/json" },
+          }
+        );
+        const data = await resp.json().catch(() => ({}));
+        if (!resp.ok || data?.ok !== true) {
+          throw new Error(data?.error || "Failed to load contacts");
+        }
+        if (aborted) return;
+        const mapped = (data.contacts || []).map((c) => ({
+          id: c.id,
+          name: c.name || c.phone_number || "Unknown",
+          lastMessage: c.last_message || "",
+          time: c.last_seen || "",
+          avatar: (c.name || c.phone_number || "?").slice(0, 2).toUpperCase(),
+        }));
+        setContacts(mapped);
+      } catch (e) {
+        if (!aborted) setError(e?.message || "Failed to load contacts");
+      } finally {
+        if (!aborted) setLoading(false);
+      }
+    }
+    fetchContacts();
+    return () => {
+      aborted = true;
+    };
+  }, []);
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
-    if (!q) return chats;
-    return chats.filter(
+    const list = contacts && contacts.length ? contacts : (chats || []);
+    if (!q) return list;
+    return list.filter(
       (c) =>
         c.name.toLowerCase().includes(q) ||
         (c.lastMessage || "").toLowerCase().includes(q)
     );
-  }, [chats, query]);
+  }, [contacts, chats, query]);
 
   // Close dropdown when clicking outside
   useEffect(() => {
@@ -93,6 +140,12 @@ export default function ChatList({ chats, activeId, onSelect, onLogout }) {
       {/* Chat List */}
       <div className="flex-1 overflow-y-auto px-3 pb-3">
         <div className="space-y-3">
+          {loading && (
+            <div className="px-5 py-3 text-textSecondary">Loading contacts...</div>
+          )}
+          {error && (
+            <div className="px-5 py-3 text-red-400">{error}</div>
+          )}
           {filtered.map((c) => {
             const active = c.id === activeId;
             return (

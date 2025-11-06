@@ -1,76 +1,76 @@
 <?php
-/**
- * receiveMessage.php
- * ------------------
- * Receives a message from the customer (Python bot → backend).
- * - Finds or creates a contact
- * - Stores message in MySQL (sender_type = 'customer')
- * - Updates last_message and last_seen
- * - Triggers a Pusher event for real-time UI updates
- */
-
 require_once __DIR__ . '/../config/config.php';
 require_once __DIR__ . '/../src/Database.php';
-require_once __DIR__ . '/../src/Auth.php';
 require_once __DIR__ . '/../src/Helpers.php';
 
-//  Authentication check
-Auth::check();
+header('Content-Type: application/json');
 
-//  Parse JSON input
+if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
+    Helpers::jsonResponse(['error' => 'Method not allowed'], 405);
+}
+
+// API key validation
+$headers = getallheaders();
+if (($headers['x-api-key'] ?? '') !== API_KEY) {
+    Helpers::jsonResponse(['error' => 'Invalid API key'], 403);
+}
+
 $input = json_decode(file_get_contents('php://input'), true);
-$number = $input['number'] ?? '';
-$message = $input['message'] ?? '';
-$timestamp = $input['timestamp'] ?? date('Y-m-d H:i:s');
+$phone = trim($input['phone'] ?? '');
+$message = trim($input['message'] ?? '');
 
-if (!$number || !$message) {
-    Helpers::jsonResponse(['error' => 'Missing parameters'], 400);
+if (!$phone || !$message) {
+    Helpers::jsonResponse(['error' => 'Missing phone or message'], 400);
 }
 
 try {
-    $db = Database::getInstance();
+    $db = Database::getInstance()->getConnection();
 
-    // ✅ Find or create contact
+    // Find or create contact
     $stmt = $db->prepare("SELECT id FROM contacts WHERE phone_number = ?");
-    $stmt->execute([$number]);
+    $stmt->execute([$phone]);
     $contact = $stmt->fetch(PDO::FETCH_ASSOC);
-
-    if (!$contact) {
-        $stmt = $db->prepare("INSERT INTO contacts (name, phone_number, created_at) VALUES (?, ?, NOW())");
-        $stmt->execute([$number, $number]);
-        $contactId = $db->lastInsertId();
-    } else {
+    if ($contact) {
         $contactId = $contact['id'];
+    } else {
+        $stmt = $db->prepare("INSERT INTO contacts (name, phone_number) VALUES (?, ?)");
+        $stmt->execute([$phone, $phone]);
+        $contactId = $db->lastInsertId();
     }
 
-    // ✅ Store message in DB
-    $stmt = $db->prepare("INSERT INTO messages (contact_id, sender_type, message_text, timestamp) VALUES (?, 'customer', ?, ?)");
-    $stmt->execute([$contactId, $message, $timestamp]);
-    $messageId = $db->lastInsertId();
+    // Save received message
+    $stmt = $db->prepare("INSERT INTO messages (contact_id, sender, message, created_at) VALUES (?, 'client', ?, NOW())");
+    $stmt->execute([$contactId, $message]);
 
-    // ✅ Update contact last message & last seen
-    $stmt = $db->prepare("UPDATE contacts SET last_message = ?, last_seen = NOW() WHERE id = ?");
-    $stmt->execute([$message, $contactId]);
+    // Auto reply
+    $autoReply = "Hello, We will reach out to you within 12 hours.";
 
-    // ✅ Trigger real-time Pusher event
-    Helpers::triggerPusher('chat-channel', 'new-message', [
-        'contact_id' => $contactId,
-        'sender_type' => 'customer',
-        'message_text' => $message,
-        'timestamp' => $timestamp,
-        'message_id' => $messageId,
-        'number' => $number,
-        'company_number' => COMPANY_WHATSAPP_NUMBER
+    $payload = json_encode([
+        'phone' => $phone,
+        'message' => $autoReply,
     ]);
-
-    // Optionally trigger contacts list update
-    Helpers::triggerPusher('chat-channel', 'contacts-updated', [
-        'contact_id' => $contactId,
-        'last_message' => $message,
-        'last_seen' => date('Y-m-d H:i:s')
+    $ch = curl_init(BOT_URL . '/send_message');
+    curl_setopt_array($ch, [
+        CURLOPT_POST => true,
+        CURLOPT_POSTFIELDS => $payload,
+        CURLOPT_HTTPHEADER => ['Content-Type: application/json', 'x-api-key: ' . API_KEY],
+        CURLOPT_RETURNTRANSFER => true,
     ]);
+    $botResponse = curl_exec($ch);
+    curl_close($ch);
 
-    Helpers::jsonResponse(['success' => true, 'message_id' => $messageId]);
+    // Push to frontend
+    if (ENABLE_PUSHER) {
+        require_once __DIR__ . '/../src/pusherInstance.php';
+        $pusher->trigger('chat-channel', 'new-message', [
+            'contact_id' => $contactId,
+            'sender' => 'client',
+            'message' => $message,
+        ]);
+    }
+
+    Helpers::jsonResponse(['ok' => true, 'bot_response' => $botResponse]);
 } catch (Exception $e) {
     Helpers::jsonResponse(['error' => $e->getMessage()], 500);
 }
+?>
