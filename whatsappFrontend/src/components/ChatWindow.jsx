@@ -44,12 +44,38 @@ export default function ChatWindow({ activeChat, messages }) {
     const channel = pusher.subscribe("chat-channel");
     channel.bind("new-message", (data) => {
       if (data.contact_id === activeChat) {
-        setChatMessages((prev) => [...prev, {
-          id: data.id || Date.now(),
-          message: data.message || data.message_text || '',
-          sender_type: data.sender_type || 'customer',
-          timestamp: data.timestamp || new Date().toISOString()
-        }]);
+        // Generate unique ID if not provided
+        const uniqueId = data.id || `pusher-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+        setChatMessages((prev) => {
+          const text = data.message || data.message_text || '';
+
+          // If this is a company (outgoing) message, replace the last optimistic temp one
+          if ((data.sender_type || 'customer') === 'company') {
+            const lastIdx = [...prev].reverse().findIndex(m => m.sender_type === 'company' && (m.id || '').startsWith('temp-') && m.message === text);
+            if (lastIdx !== -1) {
+              const idx = prev.length - 1 - lastIdx;
+              const next = [...prev];
+              next[idx] = {
+                id: uniqueId,
+                message: text,
+                sender_type: 'company',
+                timestamp: data.timestamp || new Date().toISOString(),
+              };
+              return next;
+            }
+          }
+
+          // Otherwise, prevent exact duplicates
+          const exists = prev.some(msg => msg.id === uniqueId || (msg.timestamp === data.timestamp && msg.message === text && msg.sender_type === (data.sender_type || 'customer')));
+          if (exists) return prev;
+
+          return [...prev, {
+            id: uniqueId,
+            message: text,
+            sender_type: data.sender_type || 'customer',
+            timestamp: data.timestamp || new Date().toISOString(),
+          }];
+        });
       }
     });
     return () => {
@@ -102,9 +128,9 @@ export default function ChatWindow({ activeChat, messages }) {
   return (
     <div className="flex flex-col h-full bg-(--color-panel)">
       <div className="flex-1 overflow-y-auto p-4 space-y-3">
-        {chatMessages.map((msg) => (
+        {chatMessages.map((msg, idx) => (
           <div
-            key={msg.id || msg.timestamp}
+            key={msg.id || `msg-${idx}-${msg.timestamp || Date.now()}`}
             className={`flex ${
               msg.sender_type === "company" ? "justify-end" : "justify-start"
             }`}

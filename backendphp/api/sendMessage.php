@@ -72,8 +72,7 @@ try {
 
     // Push to frontend
     if (ENABLE_PUSHER) {
-        require_once __DIR__ . '/../src/pusherInstance.php';
-        $pusher->trigger('chat-channel', 'new-message', [
+        Helpers::triggerPusher('chat-channel', 'new-message', [
             'contact_id' => $contactId,
             'id' => $db->lastInsertId(),
             'sender_type' => 'company',
