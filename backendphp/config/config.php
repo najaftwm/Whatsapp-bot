@@ -9,7 +9,7 @@ define('API_KEY', 'q6ktqrPs3wZ4kvZAzNdi7');
 
 // Session-based auth (no JWT)
 
-define('COMPANY_WHATSAPP_NUMBER', '+919653375080'); 
+define('COMPANY_WHATSAPP_NUMBER', '+917304470419'); 
 
 // Pusher Configuration
 define('PUSHER_APP_ID', '2072461');

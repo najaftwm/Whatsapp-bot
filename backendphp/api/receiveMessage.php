@@ -68,26 +68,87 @@ try {
         // Save received message
         $stmt = $db->prepare("INSERT INTO messages (contact_id, sender_type, message_text, timestamp) VALUES (?, 'customer', ?, NOW())");
         $stmt->execute([$contactId, $message]);
-        $messageId = $db->lastInsertId();
+        $messageId = (int)$db->lastInsertId();
     }
-    $messageId = $db->lastInsertId();
 
-    // Auto reply
+    // Auto reply (contact-level cooldown)
     $autoReply = "Hello, We will reach out to you within 12 hours.";
+    $cooldownMinutes = 0.5;
+    $autoReplyMessageId = null;
+    $autoReplyDispatched = false;
+    $botResponse = null;
+    $lockName = 'auto_reply_' . $contactId;
+    $lockAcquired = false;
 
-    $payload = json_encode([
-        'phone_number' => $phone,
-        'message' => $autoReply,
-    ]);
-    $ch = curl_init(BOT_URL . '/send_message');
-    curl_setopt_array($ch, [
-        CURLOPT_POST => true,
-        CURLOPT_POSTFIELDS => $payload,
-        CURLOPT_HTTPHEADER => ['Content-Type: application/json', 'x-api-key: ' . API_KEY],
-        CURLOPT_RETURNTRANSFER => true,
-    ]);
-    $botResponse = curl_exec($ch);
-    curl_close($ch);
+    try {
+        // Acquire lightweight contact-level lock to avoid double sends under concurrency
+        $lockStmt = $db->prepare("SELECT GET_LOCK(?, 5)");
+        $lockStmt->execute([$lockName]);
+        $lockResult = $lockStmt->fetch(PDO::FETCH_NUM);
+        $lockAcquired = $lockResult && isset($lockResult[0]) && (int)$lockResult[0] === 1;
+
+        $lastAutoStmt = $db->prepare("SELECT id, timestamp, TIMESTAMPDIFF(SECOND, timestamp, NOW()) AS seconds_since FROM messages WHERE contact_id = ? AND sender_type = 'company' AND message_text = ? ORDER BY timestamp DESC LIMIT 1");
+        $lastAutoStmt->execute([$contactId, $autoReply]);
+        $lastAuto = $lastAutoStmt->fetch(PDO::FETCH_ASSOC);
+
+        $withinCooldown = false;
+        if ($lastAuto) {
+            $secondsSince = is_numeric($lastAuto['seconds_since']) ? (int)$lastAuto['seconds_since'] : null;
+            $withinCooldown = $secondsSince !== null && $secondsSince < ($cooldownMinutes * 60);
+            if ($withinCooldown) {
+                $autoReplyMessageId = (int)$lastAuto['id'];
+            }
+        }
+
+        if (!$withinCooldown) {
+            // Use insert-if-not-exists pattern to prevent duplicate rows
+            $insertStmt = $db->prepare(
+                "INSERT INTO messages (contact_id, sender_type, message_text, timestamp)
+                 SELECT ?, 'company', ?, NOW()
+                 FROM DUAL
+                 WHERE NOT EXISTS (
+                     SELECT 1 FROM messages
+                     WHERE contact_id = ?
+                       AND sender_type = 'company'
+                       AND message_text = ?
+                       AND timestamp >= (NOW() - INTERVAL 60 SECOND)
+                 )"
+            );
+            $insertStmt->execute([$contactId, $autoReply, $contactId, $autoReply]);
+            $autoReplyMessageId = (int)$db->lastInsertId();
+
+            if ($autoReplyMessageId) {
+                $payload = json_encode([
+                    'phone_number' => $phone,
+                    'message' => $autoReply,
+                ]);
+                $ch = curl_init(BOT_URL . '/send_message');
+                curl_setopt_array($ch, [
+                    CURLOPT_POST => true,
+                    CURLOPT_POSTFIELDS => $payload,
+                    CURLOPT_HTTPHEADER => ['Content-Type: application/json', 'x-api-key: ' . API_KEY],
+                    CURLOPT_RETURNTRANSFER => true,
+                ]);
+                $botResponse = curl_exec($ch);
+                curl_close($ch);
+
+                $autoReplyDispatched = true;
+            } else {
+                // Row already exists; fetch latest ID for use in frontend updates
+                $existingStmt = $db->prepare("SELECT id FROM messages WHERE contact_id = ? AND sender_type = 'company' AND message_text = ? ORDER BY id DESC LIMIT 1");
+                $existingStmt->execute([$contactId, $autoReply]);
+                $existingRow = $existingStmt->fetch(PDO::FETCH_ASSOC);
+                if ($existingRow) {
+                    $autoReplyMessageId = (int)$existingRow['id'];
+                }
+            }
+        }
+    } finally {
+        if ($lockAcquired) {
+            $releaseStmt = $db->prepare("SELECT RELEASE_LOCK(?)");
+            $releaseStmt->execute([$lockName]);
+        }
+    }
 
     // Push to frontend
     if (ENABLE_PUSHER) {
@@ -101,7 +162,23 @@ try {
         ]);
     }
 
-    Helpers::jsonResponse(['ok' => true, 'bot_response' => $botResponse]);
+    if ($autoReplyDispatched && $autoReplyMessageId && ENABLE_PUSHER) {
+        Helpers::triggerPusher('chat-channel', 'new-message', [
+            'id' => $autoReplyMessageId,
+            'contact_id' => $contactId,
+            'sender_type' => 'company',
+            'message' => $autoReply,
+            'message_text' => $autoReply,
+            'timestamp' => date('Y-m-d H:i:s'),
+        ]);
+    }
+
+    Helpers::jsonResponse([
+        'ok' => true,
+        'bot_response' => $botResponse,
+        'auto_reply_sent' => $autoReplyDispatched,
+        'cooldown_minutes' => $cooldownMinutes,
+    ]);
 } catch (Exception $e) {
     Helpers::jsonResponse(['error' => $e->getMessage()], 500);
 }

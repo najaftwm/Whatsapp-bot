@@ -143,21 +143,28 @@ def send_whatsapp_message(phone, message):
     
     # Strategy 1: Click send button (most reliable)
     send_selectors = [
+        '//button[@data-testid="compose-btn-send"]',
+        '//*[@data-testid="compose-btn-send"]',
         '//button[@aria-label="Send"]',
+        '//button[@aria-label="Send message"]',
         '//span[@data-icon="send"]/ancestor::button',
         '//span[@data-icon="send"]',
         '//button[contains(@class, "send")]',
     ]
-    
+
     for selector in send_selectors:
         try:
-            # Find send button near the message input
-            send_btn = WebDriverWait(drv, 3).until(
-                EC.element_to_be_clickable((By.XPATH, f'//div[@contenteditable="true"][@data-tab="10"]/ancestor::div[contains(@class, "copyable-area")]//{selector} | //footer//{selector}'))
+            send_btn = WebDriverWait(drv, 4).until(
+                EC.element_to_be_clickable((By.XPATH, selector))
             )
+            try:
+                drv.execute_script("arguments[0].scrollIntoView({block: 'center'});", send_btn)
+                time.sleep(0.2)
+            except Exception:
+                pass
             send_btn.click()
             sent = True
-            print("✅ Message sent successfully via send button!")
+            print(f"✅ Message sent via selector: {selector}")
             break
         except Exception:
             continue
@@ -170,6 +177,16 @@ def send_whatsapp_message(phone, message):
             print("✅ Message sent with Enter key")
         except Exception as ex:
             print(f"❌ Failed to send message: {ex}")
+    
+    # Strategy 3: Use ActionChains as a fallback
+    if not sent:
+        try:
+            from selenium.webdriver import ActionChains
+            ActionChains(drv).move_to_element(msg_input).click(msg_input).send_keys(Keys.ENTER).perform()
+            sent = True
+            print("✅ Message sent using ActionChains")
+        except Exception as ex:
+            print(f"❌ Failed to send message with ActionChains: {ex}")
             return False
     
     # Wait a moment to ensure message is sent
@@ -216,11 +233,7 @@ def receive_message():
     except Exception as e:
         print(f"⚠ Failed to notify backend: {e}")
 
-    # Auto reply
-    reply_text = "Hello, We will reach out to you within 12 hours."
-    send_whatsapp_message(phone, reply_text)
-
-    return jsonify({"ok": True, "auto_reply": reply_text})
+    return jsonify({"ok": True})
 
 
 def _extract_current_chat_phone():
